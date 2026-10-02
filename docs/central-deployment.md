@@ -40,12 +40,13 @@ your own devices.
 [Unit]
 Description=CLIProxyAPI
 Wants=network-online.target
-After=network-online.target tailscaled.service
+After=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=%h/.local/bin/cli-proxy-api --config %h/.config/cli-proxy-api/config.yaml --no-browser
 WorkingDirectory=%h/.config/cli-proxy-api
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]
@@ -60,7 +61,12 @@ loginctl enable-linger "$USER"   # keep running without an active login session
 journalctl --user -u cli-proxy-api -f
 ```
 
-If the service starts before Tailscale has assigned its address, binding fails and systemd retries.
+A user unit cannot order itself after the system `tailscaled` service. If the proxy starts before
+Tailscale has assigned its address, binding fails and systemd keeps retrying until it succeeds.
+
+With `host` bound to the Tailscale IP, even a browser on the host reaches the proxy through that
+IP, so management is never "local". To use the Management Center from your devices, set
+`management.allow-remote: true` and rely on the tailnet-only bind plus a strong `secret-key`.
 
 ## Client machines
 
@@ -98,7 +104,10 @@ wire_api = "responses"
 supports_websockets = true
 ```
 
-and export the same per-machine client key as `CLIPROXY_API_KEY`. Codex tries the websocket
+and export the same per-machine client key as `CLIPROXY_API_KEY`. Desktop apps that launch Codex
+(T3 Code, IDEs) usually do not see shell exports; in that case replace `env_key` with
+`experimental_bearer_token = "<client-key-for-this-machine>"` in the provider block. For the same
+reason, prefer the `env` block of `~/.claude/settings.json` over shell exports for Claude Code. Codex tries the websocket
 transport (`GET /v1/responses`) first and falls back to HTTPS. Codex OAuth accounts must be added
 to the proxy (Management Center → OAuth Login) for Codex models to be served.
 
