@@ -242,3 +242,69 @@ func TestManagerSoonestResetFollowsObservedQuotaHeaders(t *testing.T) {
 		t.Fatalf("third Execute() used %s, want soonest-a after exhaustion was observed", got)
 	}
 }
+
+func soonestResetCodexAuth(id string, observedAt time.Time, signals map[string]string) *Auth {
+	return &Auth{ID: id, Provider: "codex", Quota: QuotaState{ObservedAt: observedAt, Signals: signals}}
+}
+
+func TestSoonestResetSelector_CodexUsesLongerWindowAsWeekly(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	selector := &SoonestResetSelector{nowFunc: func() time.Time { return now }}
+	auths := []*Auth{
+		// Plus-style: primary is the 5h window resetting very soon, secondary is weekly and late.
+		soonestResetCodexAuth("a-plus", now, map[string]string{
+			"X-Codex-Primary-Used-Percent":     "10",
+			"X-Codex-Primary-Window-Minutes":   "300",
+			"X-Codex-Primary-Reset-At":         unixSignal(now.Add(10 * time.Minute)),
+			"X-Codex-Secondary-Used-Percent":   "20",
+			"X-Codex-Secondary-Window-Minutes": "10080",
+			"X-Codex-Secondary-Reset-At":       unixSignal(now.Add(120 * time.Hour)),
+		}),
+		// Pro-style: only a weekly primary window, resetting tomorrow, known only relatively.
+		soonestResetCodexAuth("b-pro", now.Add(-time.Hour), map[string]string{
+			"X-Codex-Primary-Used-Percent":        "48",
+			"X-Codex-Primary-Window-Minutes":      "10080",
+			"X-Codex-Primary-Reset-After-Seconds": strconv.Itoa(int((25 * time.Hour).Seconds())),
+		}),
+		soonestResetCodexAuth("c-unknown", time.Time{}, nil),
+	}
+
+	got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, auths)
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got.ID != "b-pro" {
+		t.Fatalf("Pick() = %s, want b-pro (soonest weekly reset)", got.ID)
+	}
+}
+
+func TestSoonestResetSelector_CodexLimitReachedRanksLast(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	selector := &SoonestResetSelector{nowFunc: func() time.Time { return now }}
+	auths := []*Auth{
+		soonestResetCodexAuth("a-limited", now, map[string]string{
+			"X-Codex-Limit-Reached":          "true",
+			"X-Codex-Primary-Window-Minutes": "10080",
+			"X-Codex-Primary-Reset-At":       unixSignal(now.Add(time.Hour)),
+		}),
+		soonestResetCodexAuth("b-full", now, map[string]string{
+			"X-Codex-Primary-Used-Percent":   "100",
+			"X-Codex-Primary-Window-Minutes": "300",
+			"X-Codex-Primary-Reset-At":       unixSignal(now.Add(time.Hour)),
+		}),
+		soonestResetCodexAuth("c-unknown", time.Time{}, nil),
+	}
+
+	got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, auths)
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got.ID != "c-unknown" {
+		t.Fatalf("Pick() = %s, want c-unknown", got.ID)
+	}
+	// Once every observed window has rolled over the stale limit flag no longer applies.
+	later := now.Add(2 * time.Hour)
+	if rank := soonestResetRankFor(auths[0], later); rank.tier != soonestResetTierUnknown {
+		t.Fatalf("rolled-over limited window tier = %d, want unknown", rank.tier)
+	}
+}

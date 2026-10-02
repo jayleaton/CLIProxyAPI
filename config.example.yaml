@@ -128,8 +128,8 @@ access:
 routing:
   strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, soonest-reset
   # soonest-reset burns quota that is about to expire first: among available credentials it picks
-  # the one whose observed usage window resets soonest (Claude OAuth: weekly reset, then 5h reset,
-  # read from anthropic-ratelimit-unified-* response headers). Credentials with no observation yet
+  # the one whose observed usage window resets soonest (weekly reset, then 5h reset, read from
+  # Claude anthropic-ratelimit-unified-* and Codex x-codex-* headers). Credentials with no observation yet
   # are used last in ID order. Pair it with session-affinity so a thread never switches accounts
   # unless its account becomes unavailable (cooldown / quota exhausted).
   # weighted-round-robin uses each credential's integer weight (default 1, maximum 1,000,000).

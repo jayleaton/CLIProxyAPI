@@ -82,11 +82,32 @@ Verify from a client:
 curl -s -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" "$ANTHROPIC_BASE_URL/v1/models" | head
 ```
 
+### Codex CLI
+
+Codex keeps using its own ChatGPT login unless a custom provider is selected. Add to
+`~/.codex/config.toml` (Windows: `%USERPROFILE%\.codex\config.toml`):
+
+```toml
+model_provider = "devbox"
+
+[model_providers.devbox]
+name = "CLIProxyAPI (dev-box)"
+base_url = "http://devbox.<tailnet>.ts.net:8317/v1"
+env_key = "CLIPROXY_API_KEY"
+wire_api = "responses"
+supports_websockets = true
+```
+
+and export the same per-machine client key as `CLIPROXY_API_KEY`. Codex tries the websocket
+transport (`GET /v1/responses`) first and falls back to HTTPS. Codex OAuth accounts must be added
+to the proxy (Management Center → OAuth Login) for Codex models to be served.
+
 ## How selection behaves
 
-- New sessions bind to the available Claude credential whose weekly window resets soonest
-  (5h reset breaks ties), read from the `anthropic-ratelimit-unified-*` headers of earlier
-  responses. Credentials never used yet are picked last.
+- New sessions bind to the available credential whose weekly window resets soonest (5h reset
+  breaks ties), read from earlier responses: `anthropic-ratelimit-unified-*` for Claude,
+  `x-codex-primary-*` / `x-codex-secondary-*` for Codex (the longer window counts as weekly).
+  Credentials never used yet are picked last.
 - A bound session stays on its credential until that credential is unavailable (rate-limited
   into cooldown, quota exhausted, disabled), then fails over once and re-binds to the next pick.
 - Session bindings are held in memory, so a restart starts every session fresh.
