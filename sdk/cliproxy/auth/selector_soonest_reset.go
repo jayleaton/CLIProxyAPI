@@ -15,14 +15,16 @@ import (
 // SoonestResetSelector prefers the credential whose usage window resets soonest while it
 // still has usage remaining, so quota that is about to expire is consumed first.
 //
-// Ranking uses the passive quota snapshot (Auth.Quota.Signals) captured from upstream
-// response headers (Claude anthropic-ratelimit-unified-*, Codex x-codex-primary/secondary-*).
+// Ranking uses the quota snapshot (Auth.Quota.Signals) captured from upstream response headers
+// (Claude anthropic-ratelimit-unified-*, Codex x-codex-primary/secondary-*). While this selector
+// is active, the Manager also fills that snapshot for credentials without a recent response from
+// the provider usage endpoint (see QuotaUsageFetcher), so idle accounts rank by their real
+// windows. Pick itself never performs I/O.
 // The weekly window reset is the primary key because unused weekly quota is lost at reset;
-// the 5h window reset breaks ties. Credentials
-// without a usable observation (never used, provider without signals, or every observed reset
-// already in the past) rank after observed credentials in deterministic ID order, so idle
-// accounts are only started when no active window has headroom. Credentials whose observed
-// window is exhausted rank last; cooldown normally removes them before selection.
+// the 5h window reset breaks ties. Credentials without a usable observation (no usage
+// endpoint, failed probe, or every observed reset already in the past) rank after observed
+// credentials in deterministic ID order. Credentials whose window is exhausted rank last;
+// cooldown normally removes them before selection.
 //
 // Combine with session affinity so a bound session never moves while its credential remains
 // available.

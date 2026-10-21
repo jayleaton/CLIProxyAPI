@@ -114,9 +114,15 @@ to the proxy (Management Center → OAuth Login) for Codex models to be served.
 ## How selection behaves
 
 - New sessions bind to the available credential whose weekly window resets soonest (5h reset
-  breaks ties), read from earlier responses: `anthropic-ratelimit-unified-*` for Claude,
-  `x-codex-primary-*` / `x-codex-secondary-*` for Codex (the longer window counts as weekly).
-  Credentials never used yet are picked last.
+  breaks ties). Windows come from response headers (`anthropic-ratelimit-unified-*` for Claude,
+  `x-codex-primary-*` / `x-codex-secondary-*` for Codex; the longer window counts as weekly).
+  For credentials without a response in the last 5 minutes, including ones never used, the proxy
+  reads the provider usage endpoint in the background (Claude `/api/oauth/usage`, Codex
+  `/backend-api/wham/usage`). These reads do not spend model quota, so idle accounts are ranked
+  by their real windows too. Selection never waits on these reads. A failed read is retried with
+  backoff (5 min doubling to 1 h), and the credential keeps its last known windows meanwhile.
+  Credentials with no known window (API keys, failed reads) are picked last. Exhausted windows
+  rank after everything else.
 - A bound session stays on its credential until that credential is unavailable (rate-limited
   into cooldown, quota exhausted, disabled), then fails over once and re-binds to the next pick.
 - Session bindings are held in memory, so a restart starts every session fresh.

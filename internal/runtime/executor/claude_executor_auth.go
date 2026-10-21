@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -144,6 +145,26 @@ func (e *ClaudeExecutor) fetchClaudeOAuthProfile(ctx context.Context, auth *clip
 	defer cancelProfile()
 	service := claudeauth.NewClaudeAuthWithProxyURL(e.cfg, auth.ProxyURL)
 	return service.FetchOAuthProfile(profileCtx, apiKey)
+}
+
+// FetchQuotaUsage reads the OAuth usage windows used to rank credentials by quota reset.
+// The usage endpoint is a control-plane read and does not consume model quota. API-key and
+// inference-only setup-token credentials cannot read it.
+func (e *ClaudeExecutor) FetchQuotaUsage(ctx context.Context, auth *cliproxyauth.Auth) (http.Header, error) {
+	if e == nil || auth == nil {
+		return nil, cliproxyauth.ErrQuotaUsageUnsupported
+	}
+	apiKey, _ := claudeCreds(auth)
+	if !isClaudeOAuthToken(apiKey) || isClaudeSetupToken(auth, apiKey) {
+		return nil, cliproxyauth.ErrQuotaUsageUnsupported
+	}
+	usageCtx, cancelUsage := context.WithTimeout(ctx, claudeAccountProfileTimeout)
+	defer cancelUsage()
+	usage, errUsage := claudeauth.NewClaudeAuthWithProxyURL(e.cfg, auth.ProxyURL).FetchOAuthUsage(usageCtx, apiKey)
+	if errUsage != nil {
+		return nil, errUsage
+	}
+	return helps.ClaudeUsageQuotaHeaders(usage), nil
 }
 
 func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
