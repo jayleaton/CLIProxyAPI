@@ -157,19 +157,30 @@ func claudeSoonestResetRank(signals map[string]string, now time.Time) soonestRes
 // codexSoonestResetRank reads the credential-level Codex windows. Codex reports up to two
 // windows ("primary", "secondary") whose length varies by plan, so the longer live window is
 // treated as the weekly window. Additional per-model limits are ignored.
+//
+// The aggregate limit-reached/allowed flags describe the snapshot as observed. When a window
+// that was exhausted then has since reset, the flags are attributed to it and no longer apply;
+// any live exhausted window still ranks the credential as exhausted.
 func codexSoonestResetRank(signals map[string]string, observedAt, now time.Time) soonestResetRank {
 	var live []codexWindow
+	rolledOverExhausted := false
 	for _, name := range []string{"Primary", "Secondary"} {
-		if window, ok := readCodexQuotaWindow(signals, name, observedAt, now); ok {
-			live = append(live, window)
+		window, ok := readCodexQuotaWindow(signals, name, observedAt)
+		if !ok {
+			continue
 		}
+		if !window.reset.After(now) {
+			rolledOverExhausted = rolledOverExhausted || window.exhausted
+			continue
+		}
+		live = append(live, window)
 	}
 	if len(live) == 0 {
 		return soonestResetRank{tier: soonestResetTierUnknown}
 	}
 	limitReached := strings.EqualFold(quotaSignal(signals, "X-Codex-Limit-Reached"), "true") ||
 		strings.EqualFold(quotaSignal(signals, "X-Codex-Allowed"), "false")
-	if limitReached {
+	if limitReached && !rolledOverExhausted {
 		return soonestResetRank{tier: soonestResetTierExhausted}
 	}
 	if len(live) == 1 {
@@ -188,8 +199,8 @@ type codexWindow struct {
 }
 
 // readCodexQuotaWindow reads one Codex window. Reset-At is absolute; Reset-After-Seconds is
-// relative to when the snapshot was observed. Windows that already reset are skipped.
-func readCodexQuotaWindow(signals map[string]string, name string, observedAt, now time.Time) (codexWindow, bool) {
+// relative to when the snapshot was observed. The caller decides whether the window has reset.
+func readCodexQuotaWindow(signals map[string]string, name string, observedAt time.Time) (codexWindow, bool) {
 	prefix := "X-Codex-" + name + "-"
 	reset, ok := parseQuotaResetTime(quotaSignal(signals, prefix+"Reset-At"))
 	if !ok && !observedAt.IsZero() {
@@ -197,7 +208,7 @@ func readCodexQuotaWindow(signals map[string]string, name string, observedAt, no
 			reset, ok = observedAt.Add(time.Duration(after*float64(time.Second))), true
 		}
 	}
-	if !ok || !reset.After(now) {
+	if !ok {
 		return codexWindow{}, false
 	}
 	window := codexWindow{quotaWindow: quotaWindow{reset: reset}}

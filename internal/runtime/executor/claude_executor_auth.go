@@ -158,6 +158,7 @@ func (e *ClaudeExecutor) FetchQuotaUsage(ctx context.Context, auth *cliproxyauth
 	if !isClaudeOAuthToken(apiKey) || isClaudeSetupToken(auth, apiKey) {
 		return nil, cliproxyauth.ErrQuotaUsageUnsupported
 	}
+	// Bounded background read: an AGENTS.md timeout exception so a stalled read cannot pin the probe.
 	usageCtx, cancelUsage := context.WithTimeout(ctx, claudeAccountProfileTimeout)
 	defer cancelUsage()
 	usage, errUsage := claudeauth.NewClaudeAuthWithProxyURL(e.cfg, auth.ProxyURL).FetchOAuthUsage(usageCtx, apiKey)

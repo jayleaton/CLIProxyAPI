@@ -308,3 +308,59 @@ func TestSoonestResetSelector_CodexLimitReachedRanksLast(t *testing.T) {
 		t.Fatalf("rolled-over limited window tier = %d, want unknown", rank.tier)
 	}
 }
+
+func TestSoonestResetSelector_CodexShortWindowRolloverClearsAggregateRejection(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	selector := &SoonestResetSelector{nowFunc: func() time.Time { return now }}
+	// Observed while the 5h window was exhausted; that window has since reset, so the
+	// aggregate limit flags no longer apply while the weekly window still has quota.
+	recovered := soonestResetCodexAuth("a-recovered", now.Add(-time.Minute), map[string]string{
+		"X-Codex-Limit-Reached":            "true",
+		"X-Codex-Allowed":                  "false",
+		"X-Codex-Primary-Used-Percent":     "100",
+		"X-Codex-Primary-Window-Minutes":   "300",
+		"X-Codex-Primary-Reset-At":         unixSignal(now.Add(-time.Second)),
+		"X-Codex-Secondary-Used-Percent":   "20",
+		"X-Codex-Secondary-Window-Minutes": "10080",
+		"X-Codex-Secondary-Reset-At":       unixSignal(now.Add(time.Hour)),
+	})
+	later := soonestResetCodexAuth("b-later", now, map[string]string{
+		"X-Codex-Primary-Used-Percent":   "20",
+		"X-Codex-Primary-Window-Minutes": "10080",
+		"X-Codex-Primary-Reset-At":       unixSignal(now.Add(48 * time.Hour)),
+	})
+	got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, []*Auth{recovered, later})
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got.ID != recovered.ID {
+		t.Fatalf("Pick() = %s, want %s (rolled-over 5h rejection must not demote a live weekly window)", got.ID, recovered.ID)
+	}
+}
+
+func TestSoonestResetSelector_CodexAggregateRejectionStandsWithoutRolledOverWindow(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	selector := &SoonestResetSelector{nowFunc: func() time.Time { return now }}
+	// The rejection cannot be attributed to a window that has since reset, so it still applies.
+	rejected := soonestResetCodexAuth("a-rejected", now.Add(-time.Minute), map[string]string{
+		"X-Codex-Limit-Reached":            "true",
+		"X-Codex-Primary-Used-Percent":     "40",
+		"X-Codex-Primary-Window-Minutes":   "300",
+		"X-Codex-Primary-Reset-At":         unixSignal(now.Add(-time.Second)),
+		"X-Codex-Secondary-Used-Percent":   "20",
+		"X-Codex-Secondary-Window-Minutes": "10080",
+		"X-Codex-Secondary-Reset-At":       unixSignal(now.Add(time.Hour)),
+	})
+	later := soonestResetCodexAuth("b-later", now, map[string]string{
+		"X-Codex-Primary-Used-Percent":   "20",
+		"X-Codex-Primary-Window-Minutes": "10080",
+		"X-Codex-Primary-Reset-At":       unixSignal(now.Add(48 * time.Hour)),
+	})
+	got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, []*Auth{rejected, later})
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got.ID != later.ID {
+		t.Fatalf("Pick() = %s, want %s (unattributed rejection must still demote)", got.ID, later.ID)
+	}
+}

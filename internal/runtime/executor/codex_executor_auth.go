@@ -101,6 +101,7 @@ func (e *CodexExecutor) FetchQuotaUsage(ctx context.Context, auth *cliproxyauth.
 	if strings.TrimSpace(token) == "" || (baseURL != "" && !strings.HasPrefix(baseURL, "https://chatgpt.com/")) {
 		return nil, cliproxyauth.ErrQuotaUsageUnsupported
 	}
+	// Bounded background read: an AGENTS.md timeout exception so a stalled read cannot pin the probe.
 	usageCtx, cancelUsage := context.WithTimeout(ctx, codexUsageTimeout)
 	defer cancelUsage()
 	req, errRequest := http.NewRequestWithContext(usageCtx, http.MethodGet, codexUsageURL, nil)
