@@ -91,9 +91,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		return nil, err
 	}
 
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	requestPath := helps.PayloadRequestPath(opts)
-	translated = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, "antigravity", from.String(), "request", translated, originalTranslated, requestedModel, requestPath, opts.Headers)
+	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, "antigravity", "request", originalTranslated, req, opts))
 	translated = e.obfuscateSensitiveWords(translated)
 	translated = sanitizeAntigravityGeminiRequestSignatures(baseModel, translated)
 	translated, _ = sjson.DeleteBytes(translated, "request.stream")
@@ -129,7 +127,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		err = errReq
 		return nil, err
 	}
-	httpResp, errDo := httpClient.Do(httpReq)
+	httpResp, errDo := helps.WithAntigravityHTTPClientTrace(httpClient, auth, "generate_stream").Do(httpReq)
 	if errDo != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, errDo)
 		if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
@@ -253,7 +251,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
 			case <-ctx.Done():
 			}
-		} else {
+		} else if ctx.Err() == nil {
 			// Only a clean end of stream may produce a synthetic terminal event.
 			// Translating [DONE] after a read error would report a truncated
 			// stream as a successful completion.
