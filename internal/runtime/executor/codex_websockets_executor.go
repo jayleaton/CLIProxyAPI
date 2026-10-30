@@ -97,6 +97,15 @@ func (e *CodexAutoExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth
 	return e.httpExec.Refresh(ctx, auth)
 }
 
+// FetchQuotaUsage forwards to the HTTP executor so the quota usage probe reaches Codex
+// credentials through the registered wrapper.
+func (e *CodexAutoExecutor) FetchQuotaUsage(ctx context.Context, auth *cliproxyauth.Auth) (http.Header, error) {
+	if e == nil || e.httpExec == nil {
+		return nil, cliproxyauth.ErrQuotaUsageUnsupported
+	}
+	return e.httpExec.FetchQuotaUsage(ctx, auth)
+}
+
 func (e *CodexAutoExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	if e == nil || e.httpExec == nil {
 		return cliproxyexecutor.Response{}, fmt.Errorf("codex auto executor: http executor is nil")

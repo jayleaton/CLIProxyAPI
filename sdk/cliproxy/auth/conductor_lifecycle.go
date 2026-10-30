@@ -352,6 +352,7 @@ func (m *Manager) Remove(ctx context.Context, id string) {
 	}
 	m.structuralEpoch.Add(1)
 	m.queueRefreshUnschedule(id)
+	m.forgetQuotaProbe(id)
 	m.invalidateSessionAffinity(id)
 
 	if provider != "" {

@@ -50,8 +50,25 @@ var claudeOAuthInspectTargets = []string{
 	"/api/oauth/claude_cli/roles",
 }
 
+// claudeOAuthUsageHeaderOrder extends the inspect order with the beta flag the usage lookup
+// requires.
+var claudeOAuthUsageHeaderOrder = []string{
+	"Accept",
+	"Content-Type",
+	"Authorization",
+	"anthropic-beta",
+	"Cache-Control",
+	"User-Agent",
+	"Accept-Encoding",
+	"Host",
+	"Connection",
+}
+
 func claudeOAuthRequestHeaderOrder(method, requestTarget string) []string {
 	if method == http.MethodGet {
+		if strings.HasPrefix(requestTarget, "/api/oauth/usage") {
+			return claudeOAuthUsageHeaderOrder
+		}
 		for _, target := range claudeOAuthInspectTargets {
 			if strings.HasPrefix(requestTarget, target) {
 				return claudeOAuthInspectHeaderOrder

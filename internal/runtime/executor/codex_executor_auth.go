@@ -2,6 +2,10 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +81,65 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 		auth.Storage = &clonedStorage
 	}
 	return auth, nil
+}
+
+const (
+	// codexUsageURL is the ChatGPT backend usage endpoint the native client polls for its
+	// rate limit display. It is a read and does not consume model quota.
+	codexUsageURL     = "https://chatgpt.com/backend-api/wham/usage"
+	codexUsageTimeout = 10 * time.Second
+	codexUsageMaxBody = 1 << 20
+)
+
+// FetchQuotaUsage reads the ChatGPT rate limit windows used to rank credentials by quota
+// reset. API-key credentials and custom backends have no usage endpoint.
+func (e *CodexExecutor) FetchQuotaUsage(ctx context.Context, auth *cliproxyauth.Auth) (http.Header, error) {
+	if e == nil || auth == nil || codexAuthUsesAPIKey(auth) {
+		return nil, cliproxyauth.ErrQuotaUsageUnsupported
+	}
+	token, baseURL := codexCreds(auth)
+	if strings.TrimSpace(token) == "" || (baseURL != "" && !strings.HasPrefix(baseURL, "https://chatgpt.com/")) {
+		return nil, cliproxyauth.ErrQuotaUsageUnsupported
+	}
+	// Bounded background read: an AGENTS.md timeout exception so a stalled read cannot pin the probe.
+	usageCtx, cancelUsage := context.WithTimeout(ctx, codexUsageTimeout)
+	defer cancelUsage()
+	req, errRequest := http.NewRequestWithContext(usageCtx, http.MethodGet, codexUsageURL, nil)
+	if errRequest != nil {
+		return nil, fmt.Errorf("create codex usage request: %w", errRequest)
+	}
+	userAgent, _ := codexHeaderDefaults(e.cfg, auth)
+	if userAgent == "" {
+		userAgent = codexUserAgent
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Originator", codexOriginator)
+	if accountID, ok := auth.Metadata["account_id"].(string); ok && accountID != "" {
+		req.Header.Set("Chatgpt-Account-Id", accountID)
+	}
+	resp, errDo := helps.NewUtlsHTTPClient(usageCtx, e.cfg, auth, 0).Do(req)
+	if errDo != nil {
+		return nil, fmt.Errorf("fetch codex usage: %w", errDo)
+	}
+	defer func() {
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("codex executor: close usage response body: %v", errClose)
+		}
+	}()
+	body, errRead := io.ReadAll(io.LimitReader(resp.Body, codexUsageMaxBody))
+	if errRead != nil {
+		return nil, fmt.Errorf("read codex usage response: %w", errRead)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("fetch codex usage failed with status %d", resp.StatusCode)
+	}
+	var usage helps.CodexUsage
+	if errUnmarshal := json.Unmarshal(body, &usage); errUnmarshal != nil {
+		return nil, fmt.Errorf("parse codex usage response: %w", errUnmarshal)
+	}
+	return helps.CodexUsageQuotaHeaders(&usage), nil
 }
 
 func codexCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {

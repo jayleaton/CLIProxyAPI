@@ -40,6 +40,14 @@ const (
 	claudeRefreshHandshakeTimeout = 10 * time.Second
 )
 
+const (
+	// UsageURL reports the subscription usage windows the native client shows in /usage.
+	// It is a control-plane read and does not consume model quota.
+	UsageURL = "https://api.anthropic.com/api/oauth/usage"
+	// oauthUsageBeta is the beta flag the usage endpoint requires.
+	oauthUsageBeta = "oauth-2025-04-20"
+)
+
 var (
 	claudeRefreshGroup singleflight.Group
 	claudeRefreshMu    sync.Mutex
@@ -226,7 +234,8 @@ func applyClaudeOAuthAxiosHeaders(req *http.Request) {
 
 // fetchOAuthControlPlaneJSON issues an Axios-shaped OAuth control-plane GET and
 // returns the decoded response body. label names the endpoint in error text.
-func (o *ClaudeAuth) fetchOAuthControlPlaneJSON(ctx context.Context, endpoint, accessToken, label string) ([]byte, error) {
+// beta, when set, is sent as the anthropic-beta header.
+func (o *ClaudeAuth) fetchOAuthControlPlaneJSON(ctx context.Context, endpoint, accessToken, label, beta string) ([]byte, error) {
 	if o == nil || o.httpClient == nil {
 		return nil, fmt.Errorf("fetch Claude OAuth %s: HTTP client is nil", label)
 	}
@@ -241,6 +250,9 @@ func (o *ClaudeAuth) fetchOAuthControlPlaneJSON(ctx context.Context, endpoint, a
 	applyClaudeOAuthAxiosHeaders(req)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Cache-Control", "no-cache")
+	if beta != "" {
+		req.Header.Set("Anthropic-Beta", beta)
+	}
 
 	resp, errDo := o.httpClient.Do(req)
 	if errDo != nil {
@@ -263,7 +275,7 @@ func (o *ClaudeAuth) fetchOAuthControlPlaneJSON(ctx context.Context, endpoint, a
 
 // FetchOAuthProfile retrieves the account identity associated with an OAuth access token.
 func (o *ClaudeAuth) FetchOAuthProfile(ctx context.Context, accessToken string) (*OAuthProfile, error) {
-	body, errFetch := o.fetchOAuthControlPlaneJSON(ctx, ProfileURL, accessToken, "profile")
+	body, errFetch := o.fetchOAuthControlPlaneJSON(ctx, ProfileURL, accessToken, "profile", "")
 	if errFetch != nil {
 		return nil, errFetch
 	}
@@ -277,12 +289,38 @@ func (o *ClaudeAuth) FetchOAuthProfile(ctx context.Context, accessToken string) 
 	return &profile, nil
 }
 
+// OAuthUsageWindow is one subscription usage window. Utilization is a percentage (0-100).
+type OAuthUsageWindow struct {
+	Utilization *float64 `json:"utilization"`
+	ResetsAt    string   `json:"resets_at"`
+}
+
+// OAuthUsage is the subset of the OAuth usage response that describes the credential-level
+// session (5h) and weekly (7d) windows.
+type OAuthUsage struct {
+	FiveHour *OAuthUsageWindow `json:"five_hour"`
+	SevenDay *OAuthUsageWindow `json:"seven_day"`
+}
+
+// FetchOAuthUsage retrieves the subscription usage windows for an OAuth access token.
+func (o *ClaudeAuth) FetchOAuthUsage(ctx context.Context, accessToken string) (*OAuthUsage, error) {
+	body, errFetch := o.fetchOAuthControlPlaneJSON(ctx, UsageURL, accessToken, "usage", oauthUsageBeta)
+	if errFetch != nil {
+		return nil, errFetch
+	}
+	var usage OAuthUsage
+	if errUnmarshal := json.Unmarshal(body, &usage); errUnmarshal != nil {
+		return nil, fmt.Errorf("parse Claude OAuth usage response: %w", errUnmarshal)
+	}
+	return &usage, nil
+}
+
 // FetchOAuthRoles performs the claude_cli roles lookup the native client issues
 // alongside the profile query after a token exchange. Only the request shape is
 // covered by captured evidence, so the payload stays opaque and is returned raw
 // instead of being decoded into a guessed structure.
 func (o *ClaudeAuth) FetchOAuthRoles(ctx context.Context, accessToken string) (json.RawMessage, error) {
-	body, errFetch := o.fetchOAuthControlPlaneJSON(ctx, RolesURL, accessToken, "claude_cli roles")
+	body, errFetch := o.fetchOAuthControlPlaneJSON(ctx, RolesURL, accessToken, "claude_cli roles", "")
 	if errFetch != nil {
 		return nil, errFetch
 	}
